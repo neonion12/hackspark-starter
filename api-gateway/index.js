@@ -1,92 +1,68 @@
-const express = require('express');
-const axios = require('axios');
-const cors = require('cors');
+import express from 'express';
+import { createProxyMiddleware } from 'http-proxy-middleware';
+import fetch from 'node-fetch';
 
 const app = express();
-app.use(cors());
 app.use(express.json());
 
-const SERVICES = {
-  'user-service':      'http://user-service:8001',
-  'rental-service':    'http://rental-service:8002',
-  'analytics-service': 'http://analytics-service:8003',
-  'agentic-service':   'http://agentic-service:8004',
-};
+const PORT = process.env.PORT || 8000;
+const USER_SERVICE_URL    = process.env.USER_SERVICE_URL    || 'http://localhost:8001';
+const RENTAL_SERVICE_URL  = process.env.RENTAL_SERVICE_URL  || 'http://localhost:8002';
+const ANALYTICS_SERVICE_URL = process.env.ANALYTICS_SERVICE_URL || 'http://localhost:8003';
+const AGENTIC_SERVICE_URL = process.env.AGENTIC_SERVICE_URL || 'http://localhost:8004';
 
-// ==================== P1: Health Check ====================
+// P1: Health check - aggregate all downstream services
 app.get('/status', async (req, res) => {
-  const downstream = {};
-  await Promise.all(
-    Object.entries(SERVICES).map(async ([name, url]) => {
-      try {
-        const response = await axios.get(`${url}/status`, { timeout: 3000 });
-        downstream[name] = response.data.status || 'OK';
-      } catch (err) {
-        downstream[name] = 'UNREACHABLE';
-      }
+  const services = {
+    'user-service':      USER_SERVICE_URL,
+    'rental-service':    RENTAL_SERVICE_URL,
+    'analytics-service': ANALYTICS_SERVICE_URL,
+    'agentic-service':   AGENTIC_SERVICE_URL,
+  };
+
+  const results = await Promise.allSettled(
+    Object.entries(services).map(async ([name, url]) => {
+      const r = await fetch(`${url}/status`, { signal: AbortSignal.timeout(3000) });
+      const body = await r.json();
+      return [name, body.status || 'OK'];
     })
   );
+
+  const downstream = {};
+  let idx = 0;
+  for (const [name] of Object.entries(services)) {
+    const result = results[idx++];
+    downstream[name] = result.status === 'fulfilled' ? result.value[1] : 'UNREACHABLE';
+  }
+
   res.json({ service: 'api-gateway', status: 'OK', downstream });
 });
 
-// ==================== Generic Proxy Function ====================
-async function proxyRequest(req, res, serviceUrl) {
-  try {
-    const url = `${serviceUrl}${req.path}`;
-    const params = req.query;
-    const data = req.body;
-    const headers = {
-      'Content-Type': 'application/json',
-    };
-
-    // Forward Authorization header if present
-    if (req.headers.authorization) {
-      headers['Authorization'] = req.headers.authorization;
+// Proxy middleware factory
+function proxy(target) {
+  return createProxyMiddleware({
+    target,
+    changeOrigin: true,
+    on: {
+      error: (err, req, res) => {
+        res.status(502).json({ error: 'Service unavailable', details: err.message });
+      }
     }
-
-    const response = await axios({
-      method: req.method,
-      url,
-      params,
-      data: Object.keys(data).length > 0 ? data : undefined,
-      headers,
-      timeout: 30000,
-    });
-
-    res.status(response.status).json(response.data);
-  } catch (err) {
-    const status = err.response?.status || 500;
-    const data = err.response?.data || { error: 'Service error' };
-    res.status(status).json(data);
-  }
+  });
 }
 
-// ==================== User Service Routes ====================
-app.all('/users/*', (req, res) => {
-  proxyRequest(req, res, SERVICES['user-service']);
-});
+// Route to user-service
+app.use('/users', proxy(USER_SERVICE_URL));
 
-// ==================== Rental Service Routes ====================
-app.all('/rentals/*', (req, res) => {
-  proxyRequest(req, res, SERVICES['rental-service']);
-});
+// Route to rental-service
+app.use('/rentals', proxy(RENTAL_SERVICE_URL));
 
-// ==================== Analytics Service Routes ====================
-app.all('/analytics/*', (req, res) => {
-  proxyRequest(req, res, SERVICES['analytics-service']);
-});
+// Route to analytics-service
+app.use('/analytics', proxy(ANALYTICS_SERVICE_URL));
 
-// ==================== Chat / Agentic Service Routes ====================
-app.all('/chat/*', (req, res) => {
-  proxyRequest(req, res, SERVICES['agentic-service']);
-});
+// Route to agentic-service
+app.use('/chat', proxy(AGENTIC_SERVICE_URL));
 
-// Also handle /chat without trailing path
-app.all('/chat', (req, res) => {
-  proxyRequest(req, res, SERVICES['agentic-service']);
-});
-
-const PORT = 8000;
 app.listen(PORT, () => {
   console.log(`api-gateway running on port ${PORT}`);
 });

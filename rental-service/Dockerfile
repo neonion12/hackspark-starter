@@ -1,13 +1,12 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
-COPY package*.json ./
+COPY package.json ./
 RUN npm install --omit=dev
 
 FROM node:20-alpine AS runtime
 WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules
-COPY . .
+COPY package.json ./
+COPY src ./src
 EXPOSE 8002
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD wget -qO- http://localhost:8002/status || exit 1
-CMD ["node", "index.js"]
+CMD ["node", "src/index.js"]
