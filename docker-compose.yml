@@ -1,37 +1,30 @@
-name: RentPi
-
-# N.B. You can change this according to your need
-
 services:
-
-  # ── Infrastructure ──────────────────────────────────────────────────────────
-
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER:     ${POSTGRES_USER:-rentpi}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-localpassword}
-      POSTGRES_DB:       ${POSTGRES_DB:-rentpi_local}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rentpi} -d ${POSTGRES_DB:-rentpi_local}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - rentpi-net
 
-  mongodb:
-    image: mongo:7-jammy
+  mongo:
+    image: mongo:7
     restart: unless-stopped
-    volumes:
-      - mongo_data:/data/db
     ports:
       - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
     healthcheck:
       test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
       interval: 10s
@@ -40,54 +33,24 @@ services:
     networks:
       - rentpi-net
 
-  # ── Application Services ────────────────────────────────────────────────────
-
-  api-gateway:
-    build:
-      context: ./api-gateway
-      dockerfile: Dockerfile
-    restart: unless-stopped
-    ports:
-      - "${GATEWAY_PORT:-8000}:8000"
-    environment:
-      PORT:                  8000
-      USER_SERVICE_URL:      http://user-service:8001
-      RENTAL_SERVICE_URL:    http://rental-service:8002
-      ANALYTICS_SERVICE_URL: http://analytics-service:8003
-      AGENTIC_SERVICE_URL:   http://agentic-service:8004
-    depends_on:
-      user-service:
-        condition: service_healthy
-      rental-service:
-        condition: service_healthy
-      analytics-service:
-        condition: service_healthy
-      agentic-service:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/status || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-    networks:
-      - rentpi-net
-
   user-service:
-    build:
-      context: ./user-service
-      dockerfile: Dockerfile
+    build: ./user-service
     restart: unless-stopped
     ports:
-      - "${USER_SERVICE_PORT:-8001}:8001"
-    environment:
-      PORT:              8001
-      DATABASE_URL:      ${DATABASE_URL}
-      JWT_SECRET:        ${JWT_SECRET}
-      CENTRAL_API_URL:   ${CENTRAL_API_URL}
-      CENTRAL_API_TOKEN: ${CENTRAL_API_TOKEN}
+      - "${USER_SERVICE_PORT}:8001"
     depends_on:
       postgres:
         condition: service_healthy
+    environment:
+      PORT: 8001
+      DATABASE_URL: ${DATABASE_URL}
+      DB_HOST: postgres
+      DB_USER: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      CENTRAL_API_TOKEN: ${CENTRAL_API_TOKEN}
+      CENTRAL_API_URL: ${CENTRAL_API_URL}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8001/status || exit 1"]
       interval: 15s
@@ -97,20 +60,14 @@ services:
       - rentpi-net
 
   rental-service:
-    build:
-      context: ./rental-service
-      dockerfile: Dockerfile
+    build: ./rental-service
     restart: unless-stopped
     ports:
-      - "${RENTAL_SERVICE_PORT:-8002}:8002"
+      - "${RENTAL_SERVICE_PORT}:8002"
     environment:
-      PORT:              8002
-      CENTRAL_API_URL:   ${CENTRAL_API_URL}
+      PORT: 8002
       CENTRAL_API_TOKEN: ${CENTRAL_API_TOKEN}
-      USER_SERVICE_URL:  http://user-service:8001
-    depends_on:
-      user-service:
-        condition: service_healthy
+      CENTRAL_API_URL: ${CENTRAL_API_URL}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8002/status || exit 1"]
       interval: 15s
@@ -120,16 +77,14 @@ services:
       - rentpi-net
 
   analytics-service:
-    build:
-      context: ./analytics-service
-      dockerfile: Dockerfile
+    build: ./analytics-service
     restart: unless-stopped
     ports:
-      - "${ANALYTICS_SERVICE_PORT:-8003}:8003"
+      - "${ANALYTICS_SERVICE_PORT}:8003"
     environment:
-      PORT:              8003
-      CENTRAL_API_URL:   ${CENTRAL_API_URL}
+      PORT: 8003
       CENTRAL_API_TOKEN: ${CENTRAL_API_TOKEN}
+      CENTRAL_API_URL: ${CENTRAL_API_URL}
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8003/status || exit 1"]
       interval: 15s
@@ -139,27 +94,26 @@ services:
       - rentpi-net
 
   agentic-service:
-    build:
-      context: ./agentic-service
-      dockerfile: Dockerfile
+    build: ./agentic-service
     restart: unless-stopped
     ports:
-      - "${AGENTIC_SERVICE_PORT:-8004}:8004"
-    environment:
-      PORT:                  8004
-      MONGO_URI:             ${MONGO_URI}
-      CENTRAL_API_URL:       ${CENTRAL_API_URL}
-      CENTRAL_API_TOKEN:     ${CENTRAL_API_TOKEN}
-      GEMINI_API_KEY:        ${GEMINI_API_KEY:-}
-      ANALYTICS_SERVICE_URL: http://analytics-service:8003
-      RENTAL_SERVICE_URL:    http://rental-service:8002
+      - "${AGENTIC_SERVICE_PORT}:8004"
     depends_on:
-      mongodb:
+      mongo:
         condition: service_healthy
       analytics-service:
         condition: service_healthy
-      rental-service:        
+      rental-service:
         condition: service_healthy
+    environment:
+      PORT: 8004
+      CENTRAL_API_TOKEN: ${CENTRAL_API_TOKEN}
+      CENTRAL_API_URL: ${CENTRAL_API_URL}
+      MONGO_URI: mongodb://mongo:27017/rentpi_agentic
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      ANALYTICS_SERVICE_URL: http://analytics-service:8003
+      RENTAL_SERVICE_URL: http://rental-service:8002
+      USER_SERVICE_URL: http://user-service:8001
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8004/status || exit 1"]
       interval: 15s
@@ -168,21 +122,45 @@ services:
     networks:
       - rentpi-net
 
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+  api-gateway:
+    build: ./api-gateway
     restart: unless-stopped
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "${GATEWAY_PORT}:8000"
+    depends_on:
+      user-service:
+        condition: service_healthy
+      rental-service:
+        condition: service_healthy
+      analytics-service:
+        condition: service_healthy
+      agentic-service:
+        condition: service_healthy
     environment:
-      VITE_GATEWAY_URL:        http://localhost:8000
-      NEXT_PUBLIC_GATEWAY_URL: http://localhost:8000
-      GATEWAY_URL_INTERNAL:    http://api-gateway:8000 
+      PORT: 8000
+      USER_SERVICE_URL: http://user-service:8001
+      RENTAL_SERVICE_URL: http://rental-service:8002
+      ANALYTICS_SERVICE_URL: http://analytics-service:8003
+      AGENTIC_SERVICE_URL: http://agentic-service:8004
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/status || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks:
+      - rentpi-net
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT}:3000"
     depends_on:
       api-gateway:
         condition: service_healthy
-    healthcheck:                                     
+    environment:
+      VITE_API_URL: http://localhost:8000
+    healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000 || exit 1"]
       interval: 15s
       timeout: 5s
@@ -190,12 +168,10 @@ services:
     networks:
       - rentpi-net
 
-# ── Named Volumes ─────────────────────────────────────────────────────────────
 volumes:
   postgres_data:
   mongo_data:
 
-# ── Network ───────────────────────────────────────────────────────────────────
 networks:
   rentpi-net:
     driver: bridge
